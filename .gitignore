@@ -1,0 +1,5 @@
+.idea/
+.ipynv_checkpoints/
+data/
+result/
+*.sh
