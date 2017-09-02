@@ -63,9 +63,11 @@ def train_model(model, trainx, trainy, cv=0, grid_search=False, re_fit=True, gri
     return model
 
 
-def predict_and_save_result(model, test_x, test, save_path):
+def predict_and_save_result(model, test_x, test, save_path, transform=None):
     predicts = model.predict(test_x)
-    predicts = np.exp(predicts) - 1
+    if transform is not None:
+        if transform == "log":
+            predicts = np.exp(predicts) - 1
     test["trip_duration"] = predicts
     save_result(test[["id", "trip_duration"]], save_path)
 
@@ -140,15 +142,23 @@ def preprocess_step_direction(data):
     data["left"] = counters.map(lambda x: x["left"])
     data["right"] = counters.map(lambda x: x["right"])
     data["straight"] = counters.map(lambda x: x["straight"])
-
+    data["uturn"] = counters.map(lambda x: x["uturn"])
+    data["slight_left"] = counters.map(lambda x: x["slight left"])
+    data["slight_right"] = counters.map(lambda x: x["slight right"])
     # left,right,straight 站它们和的比例
+    data["sum_all"] = data.left + data.right + data.straight + data.uturn + data.slight_left + data.slight_right
+    data["n_step_other"] = data.number_of_steps - data.sum_all
+    data["sum_all_is_zero"] = np.where(data.sum_all == 0, 1, 0)
     data["sum_left_right_straight"] = data.left + data.right + data.straight
-    data["ratio_left_sum_all"] = data.left / data.sum_left_right_straight
-    data["ratio_right_sum_all"] = data.right / data.sum_left_right_straight
-    data["ratio_straight_sum_all"] = data.straight / data.sum_left_right_straight
-    data["ratio_except_left_sum_all"] = (data.right + data.straight) / data.sum_left_right_straight
-    data["ratio_except_right_sum_all"] = (data.left + data.straight) / data.sum_left_right_straight
-    data["ratio_except_straight_sum_all"] = (data.right + data.left) / data.sum_left_right_straight
+    data["ratio_left_sum_all"] = (data.left / data.sum_all).fillna(0)
+    data["ratio_right_sum_all"] = (data.right / data.sum_all).fillna(0)
+    data["ratio_straight_sum_all"] = (data.straight / data.sum_all).fillna(0)
+    data["ratio_right_left_sum_all"] = ((data.right + data.left) / data.sum_all).fillna(0)
+    data["ratio_straight_right_sum_all"] = ((data.right + data.straight) / data.sum_all).fillna(0)
+    data["ratio_left_straight_sum_all"] = ((data.straight + data.left) / data.sum_all).fillna(0)
+    data["ratio_uturn_sum_all"] = (data.uturn / data.sum_all).fillna(0)
+    data["ratio_slight_left_sum_all"] = (data.slight_left / data.sum_all).fillna(0)
+    data["ratio_slight_right_sum_all"] = (data.slight_right / data.sum_all).fillna(0)
     return data
 
 

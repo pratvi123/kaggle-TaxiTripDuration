@@ -27,10 +27,13 @@ x_columns = ["vendor_id",
              'store_and_fwd_int',
              'total_distance',
              'number_of_steps',
+             'n_step_other',
              'left', 'right', 'straight',
-             'sum_left_right_straight',
+             'uturn', 'slight_left', 'slight_right',
+             'sum_left_right_straight', 'sum_all', 'sum_all_is_zero',
              'ratio_left_sum_all', 'ratio_right_sum_all', 'ratio_straight_sum_all',
-             'ratio_except_left_sum_all', 'ratio_except_right_sum_all', 'ratio_except_straight_sum_all',
+             'ratio_right_left_sum_all', 'ratio_straight_right_sum_all', 'ratio_left_straight_sum_all',
+             'ratio_uturn_sum_all', 'ratio_slight_left_sum_all', 'ratio_slight_right_sum_all',
              'month',
              'hour',
              'weekday',
@@ -63,12 +66,14 @@ x_columns = ["vendor_id",
 def ExtraTreeMain(train, test):
     print "ExtraTreeMain"
     train_y = train["trip_duration"].values
+    train_y = np.log(train_y + 1)
     print "features:", x_columns
     print "feature size:", len(x_columns)
     train_x = train[x_columns]
     test_x = test[x_columns]
-
-    model = ExtraTreesRegressor(n_estimators=500, min_samples_leaf=20, n_jobs=-1)
+    n_estimators = 500
+    min_samples_leaf = 20
+    model = ExtraTreesRegressor(n_estimators=n_estimators, min_samples_leaf=min_samples_leaf, n_jobs=-1)
     params = {
         "n_estimators": [200, 500, 100],
         "max_features": ["auto"],
@@ -76,7 +81,11 @@ def ExtraTreeMain(train, test):
         "min_samples_leaf": [10, 20, 30]
     }
     model = train_model(model, train_x, train_y, cv=0, re_fit=True, grid_search=False, grid_params=params)
-    predict_and_save_result(model, test_x, test, "../result/ExtraTrees_500estimators_20minleaf_17f.csv")
+    predict_and_save_result(model, test_x, test,
+                            "../result/ExtraTrees_{}estimators_{}minleaf_{}f.csv".format(n_estimators,
+                                                                                         min_samples_leaf,
+                                                                                         len(x_columns)),
+                            transform="log")
 
 
 def RandomForestMain(train, test):
@@ -88,15 +97,21 @@ def RandomForestMain(train, test):
     train_x = train[x_columns]
     test_x = test[x_columns]
 
-    model = RandomForestRegressor(n_estimators=200, min_samples_leaf=20, n_jobs=-1)
+    min_samples_leaf = 20
+    n_estimators = 500
+    model = RandomForestRegressor(n_estimators=n_estimators, min_samples_leaf=min_samples_leaf, n_jobs=-1)
     params = {
         "n_estimators": [200, 500, 1000],
         "max_features": ["auto"],
         "max_depth": [None],
         "min_samples_leaf": [5, 10, 20]
     }
-    model = train_model(model, train_x, train_y, cv=2, re_fit=True, grid_search=False, grid_params=params)
-    predict_and_save_result(model, test_x, test, "../result/RandomForest_200esti_20leaf_27f.csv")
+    model = train_model(model, train_x, train_y, cv=0, re_fit=True, grid_search=False, grid_params=params)
+    predict_and_save_result(model, test_x, test,
+                            "../result/RandomForest_{}esti_{}leaf_{}f.csv".format(n_estimators,
+                                                                                  min_samples_leaf,
+                                                                                  len(x_columns)),
+                            transform="log")
 
 
 def XGB_Main(train, test):
@@ -160,5 +175,5 @@ if __name__ == '__main__':
     # print train.columns
 
     # ExtraTreeMain(train, test)
-    # RandomForestMain(train, test)
-    XGB_Main(train, test)
+    RandomForestMain(train, test)
+    # XGB_Main(train, test)
