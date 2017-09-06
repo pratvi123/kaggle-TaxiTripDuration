@@ -15,12 +15,28 @@ import pandas as pd
 from collections import Counter
 import numpy as np
 from sklearn.model_selection import GridSearchCV, cross_val_score
-from sklearn.cluster import KMeans
+from sklearn.decomposition import PCA
 import time
 import os
+from cluster import k_means
 
 # __amplification_factor = 10 ** 5
 __amplification_factor = 1
+
+lon_lim = [-74.03, -73.75]  # lon
+lat_lim = [40.6, 40.9]  # lat
+
+k_means_n_cluster = 100
+other_feature_names = []
+
+group_twos = [["pickup_label", "dropoff_label"],
+              ["pickup_label", "hour"],
+              ["pickup_label", "weekday"],
+              ["pickup_label", "weekofyear"]]
+group_ones = ["pickup_label", "hour", "weekday", "weekofyear", "dayofyear"]
+avgs = ["log_trip_duration", "speed_m", "speed_h"]
+
+
 
 
 def train_model(model, trainx, trainy, cv=0, grid_search=False, re_fit=True, grid_params=None):
@@ -41,7 +57,7 @@ def train_model(model, trainx, trainy, cv=0, grid_search=False, re_fit=True, gri
                 model.fit(trainx, trainy)
                 print "fit spend ", (time.time() - start2)
                 return model
-            print "warning!!! no train model. if want to train, set re_fit True."
+            print "warning!!! model dont fit data. if want to train, set re_fit True."
     else:
         # grid search cv
 
@@ -53,13 +69,17 @@ def train_model(model, trainx, trainy, cv=0, grid_search=False, re_fit=True, gri
                                    n_jobs=-1,
                                    scoring="neg_mean_squared_error")
         grid_search.fit(trainx, trainy)
+        # print "cv_result", grid_search.cv_results_
         print "best params ", grid_search.best_params_
         scores = grid_search.best_score_
         scores = np.sqrt(-scores)
         print "grid search spend ", (time.time() - start)
         print "scores", scores
         print "mean score", scores.mean()
-        model = grid_search.best_estimator_
+        if re_fit == True:
+            model = grid_search.best_estimator_
+        else:
+            print "warning!!! model dont fit data. if want to train, set re_fit True."
     return model
 
 
@@ -76,7 +96,13 @@ def save_result(result, path):
     assert isinstance(result, pd.DataFrame)
     assert len(result.columns.values) == 2
     assert ("id" in result.columns.values and "trip_duration" in result.columns.values)
+    print "save in ", path
     result.to_csv(path, index=False)
+
+
+def preprocess_trip_duration(data):
+    data["log_trip_duration"] = np.log(data.trip_duration + 1)
+    return data
 
 
 def preprocess_weather(train, test):
@@ -133,6 +159,20 @@ def preprocess_lon_lat(data):
                               data.pickup_latitude / __amplification_factor,
                               data.dropoff_longitude / __amplification_factor,
                               data.dropoff_latitude / __amplification_factor)
+    # 是否是超级长途
+    xlim = lon_lim
+    ylim = lat_lim  # lat
+    # 起点或者终点超过这个区域看成是超级长途,设为1
+    data["super_long"] = np.where(
+            ((data.pickup_longitude >= xlim[0]) &
+             (data.pickup_longitude <= xlim[1]) &
+             (data.dropoff_longitude >= xlim[0]) &
+             (data.dropoff_longitude <= xlim[1]) &
+             (data.pickup_latitude >= ylim[0]) &
+             (data.pickup_latitude <= ylim[1]) &
+             (data.dropoff_latitude >= ylim[0]) &
+             (data.dropoff_latitude <= ylim[1])) == True, 0, 1)
+
     return data
 
 
@@ -145,9 +185,13 @@ def preprocess_step_direction(data):
     data["uturn"] = counters.map(lambda x: x["uturn"])
     data["slight_left"] = counters.map(lambda x: x["slight left"])
     data["slight_right"] = counters.map(lambda x: x["slight right"])
+    data["sharp_left"] = counters.map(lambda x: x["sharp left"])
+    data["sharp_right"] = counters.map(lambda x: x["sharp right"])
     # left,right,straight 站它们和的比例
-    data["sum_all"] = data.left + data.right + data.straight + data.uturn + data.slight_left + data.slight_right
-    data["n_step_other"] = data.number_of_steps - data.sum_all
+    data[
+        "sum_all"] = data.left + data.right + data.straight + data.uturn + data.slight_left + data.slight_right + data.sharp_left + data.sharp_right
+    data["ratio_n_step_other_number_of_steps"] = ((data.number_of_steps - data.sum_all) / data.number_of_steps).fillna(
+            0)
     data["sum_all_is_zero"] = np.where(data.sum_all == 0, 1, 0)
     data["sum_left_right_straight"] = data.left + data.right + data.straight
     data["ratio_left_sum_all"] = (data.left / data.sum_all).fillna(0)
@@ -159,6 +203,8 @@ def preprocess_step_direction(data):
     data["ratio_uturn_sum_all"] = (data.uturn / data.sum_all).fillna(0)
     data["ratio_slight_left_sum_all"] = (data.slight_left / data.sum_all).fillna(0)
     data["ratio_slight_right_sum_all"] = (data.slight_right / data.sum_all).fillna(0)
+    data["ratio_sharp_left_sum_all"] = (data.sharp_left / data.sum_all).fillna(0)
+    data["ratio_sharp_right_sum_all"] = (data.sharp_right / data.sum_all).fillna(0)
     return data
 
 
@@ -211,16 +257,42 @@ def preprocess_duration_and_fast_travel_time(train, test):
     return train, test
 
 
+def preprocess_pca(train, test):
+    # pca lon lat
+    coords = np.vstack((train[['pickup_latitude', 'pickup_longitude']].values,
+                        train[['dropoff_latitude', 'dropoff_longitude']].values,
+                        test[['pickup_latitude', 'pickup_longitude']].values,
+                        test[['dropoff_latitude', 'dropoff_longitude']].values))
+    pca = PCA().fit(coords)
+    train['pickup_pca1'] = pca.transform(train[['pickup_latitude', 'pickup_longitude']])[:, 0]
+    train['pickup_pca0'] = pca.transform(train[['pickup_latitude', 'pickup_longitude']])[:, 1]
+    train['dropoff_pca1'] = pca.transform(train[['dropoff_latitude', 'dropoff_longitude']])[:, 0]
+    train['dropoff_pca0'] = pca.transform(train[['dropoff_latitude', 'dropoff_longitude']])[:, 1]
+    train['pca_manhattan'] = np.abs(train['dropoff_pca1'] - train['pickup_pca1']) + np.abs(
+            train['dropoff_pca0'] - train['pickup_pca0'])
+    train['pca_euclidean'] = np.sqrt(
+            np.square(np.abs(train['dropoff_pca1'] - train['pickup_pca1'])) +
+            np.square(np.abs(train['dropoff_pca0'] - train['pickup_pca0'])))
+
+    test['pickup_pca1'] = pca.transform(test[['pickup_latitude', 'pickup_longitude']])[:, 0]
+    test['pickup_pca0'] = pca.transform(test[['pickup_latitude', 'pickup_longitude']])[:, 1]
+    test['dropoff_pca1'] = pca.transform(test[['dropoff_latitude', 'dropoff_longitude']])[:, 0]
+    test['dropoff_pca0'] = pca.transform(test[['dropoff_latitude', 'dropoff_longitude']])[:, 1]
+    test['pca_manhattan'] = np.abs(test['dropoff_pca1'] - test['pickup_pca1']) + np.abs(
+            test['dropoff_pca0'] - test['pickup_pca0'])
+    test['pca_euclidean'] = np.sqrt(
+            np.square(np.abs(test['dropoff_pca1'] - test['pickup_pca1'])) +
+            np.square(np.abs(test['dropoff_pca0'] - test['pickup_pca0'])))
+    return train, test
+
+
 def preprocess_cluster(train, test):
-    lon_lim = [-74.03, -73.77]
-    lat_lim = [40.6, 40.9]
     loc_df = pd.DataFrame()
     loc_df["lons"] = list(train.pickup_longitude) + list(train.dropoff_longitude)
     loc_df["lats"] = list(train.pickup_latitude) + list(train.dropoff_latitude)
     loc_df = loc_df[(loc_df.lons >= lon_lim[0]) & (loc_df.lons <= lon_lim[1])]
     loc_df = loc_df[(loc_df.lats >= lat_lim[0]) & (loc_df.lats <= lat_lim[1])]
-    cluster = KMeans(n_clusters=15, random_state=2017)
-    cluster.fit(loc_df)
+    cluster = k_means(loc_df, n_clusters=k_means_n_cluster)
     # label
     train["pickup_label"] = cluster.predict(train[["pickup_longitude", "pickup_latitude"]])
     train["dropoff_label"] = cluster.predict(train[["dropoff_longitude", "dropoff_latitude"]])
@@ -314,6 +386,31 @@ def preprocess_cluster(train, test):
                                         test.dropoff_latitude,
                                         test.dropoff_label_longitude,
                                         test.dropoff_label_latitude)
+
+    train["speed_m"] = 1000 * train.manhattan_distance / train.trip_duration
+    train["speed_h"] = 1000 * train.haversine_distance / train.trip_duration
+
+
+    for group in group_twos:
+        temp = train[group + avgs].groupby(group).mean().reset_index()
+        new_group = list(group)
+        for avg_name in avgs:
+            f_name = "{}_{}_avg_{}".format(group[0], group[1], avg_name)
+            new_group.append(f_name)
+        temp.columns = new_group
+        train = pd.merge(train, temp, on=group, how="left")
+        test = pd.merge(test, temp, on=group, how="left")
+
+
+    for group in group_ones:
+        temp = train[[group] + avgs].groupby(group).mean().reset_index()
+        new_group = list([group])
+        for avg_name in avgs:
+            f_name = "{}_avg_{}".format(group, avg_name)
+            new_group.append(f_name)
+        temp.columns = new_group
+        train = pd.merge(train, temp, on=group, how="left")
+        test = pd.merge(test, temp, on=group, how="left")
     return train, test
 
 
@@ -330,6 +427,7 @@ def load_train():
         ft_part2 = pd.read_csv("../data/fastest_routes_train_part_2.csv")
         ft = pd.concat([ft_part1, ft_part2])
         __train = pd.merge(__train, ft, on="id")
+        __train = preprocess_trip_duration(__train)
         __train = preprocess_time(__train)
         __train = preprocess_lon_lat(__train)
         __train = preprocess_step_direction(__train)
@@ -354,7 +452,7 @@ def load_test():
 
 
 CACHE = True
-CACHE_PATH = "../data/CACHE/{}_pickle"
+CACHE_PATH = "../data/CACHE/{}_{}clusters_pickle"
 
 
 # (1458643, 35) train
@@ -363,8 +461,10 @@ CACHE_PATH = "../data/CACHE/{}_pickle"
 # no cache 142s
 def load_train_and_test():
     start = time.time()
-    train_cache_path = CACHE_PATH.format("train")
-    test_cache_path = CACHE_PATH.format("test")
+    train_cache_path = CACHE_PATH.format("train", str(k_means_n_cluster))
+    print "train_cache_path", train_cache_path
+    test_cache_path = CACHE_PATH.format("test", str(k_means_n_cluster))
+    print "test_cache_path", test_cache_path
     if CACHE and os.path.exists(train_cache_path) and os.path.exists(test_cache_path):
         print "read cache data"
         train = pd.read_pickle(train_cache_path)
@@ -375,6 +475,7 @@ def load_train_and_test():
         test = load_test()
 
         # 抽取实际时间和最快时间 之间的特征
+        train, test = preprocess_pca(train, test)
         train, test = preprocess_duration_and_fast_travel_time(train, test)
         train, test = preprocess_cluster(train, test)
         train, test = preprocess_weather(train, test)
@@ -392,6 +493,17 @@ def load_train_and_test():
     print "in test, null size is ", test_null_size
 
     print "train columns:", train.columns
+
+
+    for group in group_twos:
+        for avg_name in avgs:
+            f_name = "{}_{}_avg_{}".format(group[0], group[1], avg_name)
+            other_feature_names.append(f_name)
+    for group in group_ones:
+        for avg_name in avgs:
+            f_name = "{}_avg_{}".format(group, avg_name)
+            other_feature_names.append(f_name)
+
     return train, test
 
 

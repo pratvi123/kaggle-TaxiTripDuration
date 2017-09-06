@@ -18,6 +18,7 @@ from sklearn.model_selection import train_test_split
 from sklearn.ensemble import RandomForestRegressor
 from sklearn.ensemble import ExtraTreesRegressor
 import xgboost as xgb
+from xgboost.sklearn import XGBRegressor
 
 # 主要是树模型
 
@@ -27,13 +28,15 @@ x_columns = ["vendor_id",
              'store_and_fwd_int',
              'total_distance',
              'number_of_steps',
-             'n_step_other',
+             'ratio_n_step_other_number_of_steps',
              'left', 'right', 'straight',
              'uturn', 'slight_left', 'slight_right',
              'sum_left_right_straight', 'sum_all', 'sum_all_is_zero',
              'ratio_left_sum_all', 'ratio_right_sum_all', 'ratio_straight_sum_all',
              'ratio_right_left_sum_all', 'ratio_straight_right_sum_all', 'ratio_left_straight_sum_all',
              'ratio_uturn_sum_all', 'ratio_slight_left_sum_all', 'ratio_slight_right_sum_all',
+             'ratio_sharp_left_sum_all', 'ratio_sharp_right_sum_all',
+             'super_long',
              'month',
              'hour',
              'weekday',
@@ -59,7 +62,7 @@ x_columns = ["vendor_id",
              'haversine_distance_pcenter_dcenter', 'manhattan_distance_pcenter_dcenter', 'bearing_pcenter_dcenter',
              'haversine_distance_d_dcenter', 'manhattan_distance_d_dcenter', 'bearing_d_dcenter',
              'max_T', 'min_T', 'avg_T', 'precipitation', 'snow_fall', 'snow_depth',
-             # "pickup_pca0", "pickup_pca1", "dropoff_pca0", "dropoff_pca1"
+             "pickup_pca0", "pickup_pca1", "dropoff_pca0", "dropoff_pca1", "pca_manhattan", "pca_euclidean",
              ]
 
 
@@ -131,28 +134,87 @@ def XGB_Main(train, test):
     watchlist = [(dtrain, 'train'), (dvalid, 'valid')]
 
     # Try different parameters! My favorite is random search :)
-    lr = 0.2
-    xgb_pars = {'min_child_weight': 50, 'eta': lr, 'colsample_bytree': 0.3, 'max_depth': 15,
-                'subsample': 0.8, 'lambda': 1., 'nthread': -1, 'booster': 'gbtree', 'silent': 1,
+    lr = 0.1
+    n_rounds = 5000
+    early_stopping_rounds = 200
+    xgb_pars = {'min_child_weight': 100,
+                'eta': lr,
+                'colsample_bytree': 0.5,
+                'max_depth': 10,
+                'subsample': 0.85,
+                'lambda': 0,
+                'alpha': 0,
+                'gamma': 0,
+                'nthread': -1, 'booster': 'gbtree', 'silent': 1,
                 'eval_metric': 'rmse', 'objective': 'reg:linear'}
 
     # You could try to train with more epoch
-    n_rounds = 100
-    model = xgb.train(xgb_pars, dtrain, n_rounds, watchlist, early_stopping_rounds=2,
-                      maximize=False, verbose_eval=1)
+    # model = xgb.train(xgb_pars, dtrain, n_rounds, watchlist, early_stopping_rounds=early_stopping_rounds,
+    #                   maximize=False, verbose_eval=1)
+
+
+    model = XGBRegressor(learning_rate=lr,
+                         n_estimators=n_rounds,
+                         max_depth=xgb_pars["max_depth"],
+                         min_child_weight=xgb_pars["min_child_weight"],
+                         gamma=xgb_pars["gamma"],  # 指定分裂节点损失下降的最小值
+                         subsample=xgb_pars["subsample"],
+                         colsample_bytree=xgb_pars["colsample_bytree"],
+                         objective=xgb_pars["objective"],
+                         nthread=xgb_pars["nthread"],
+                         reg_lambda=xgb_pars["lambda"],  # l2正则
+                         reg_alpha=xgb_pars["alpha"],  # l1正则
+                         seed=2017)
+    model.fit(Xtr, ytr, early_stopping_rounds=early_stopping_rounds, eval_metric=xgb_pars["eval_metric"],
+              eval_set=[[Xv, yv]])
     print("Time taken by above cell is {}.".format(time.time() - start))
     print('Modeling RMSLE %.5f' % model.best_score)
+    # exit(1)
 
-    predicts = model.predict(dtest, ntree_limit=model.best_ntree_limit)
+    # xgb.cv(xgb_pars, dtrain, num_boost_round=n_rounds)
+
+    # grid seach sv
+    # param_test1 = {
+    #     'max_depth': np.arange(4, 22, 2),+
+    #     'min_child_weight': np.arange(40, 100, 5)
+    # }
+
+    # train_model(model, train_x, train_y, cv=3, grid_search=True, re_fit=False, grid_params=param_test1)
+
+    predicts = model.predict(test_x, ntree_limit=model.best_ntree_limit)
     predicts = np.exp(predicts) - 1
     test["trip_duration"] = predicts
-    save_path = "../result/XGB_{}rounds_{}lr_{}f.csv".format(n_rounds, lr, len(x_columns))
+    csv__format = "XGB_{}rounds_{}lr_{}f_{}weight_" \
+                  "{}depth_{}cb_{}subsample_{}gamma_{}lambda_{}alpha.csv".format(n_rounds, lr, len(x_columns),
+                                                                                 xgb_pars["min_child_weight"],
+                                                                                 xgb_pars["max_depth"],
+                                                                                 xgb_pars["colsample_bytree"],
+                                                                                 xgb_pars["subsample"],
+                                                                                 xgb_pars["gamma"], xgb_pars["lambda"],
+                                                                                 xgb_pars["alpha"])
+    save_path = "../result/" + csv__format
+
     save_result(test[["id", "trip_duration"]], save_path)
+
+    # save model
+    model_save_path = "../result/MODEL/" + csv__format
+    model.booster().save_model(model_save_path.replace("csv", "model"))
+    # feature importance
+    feature_importance_dict = model.booster().get_fscore()
+    print model.feature_importances_
+    print feature_importance_dict
+    # fs = ['f%i' % i for i in range(len(feature_names))]
+    # f1 = pd.DataFrame({'f': list(feature_importance_dict.keys()), 'importance': list(feature_importance_dict.values())})
+    # f2 = pd.DataFrame({'f': fs, 'feature_name': feature_names, 'rmse_wo_feature': rmse_wo_feature})
+    # feature_importance = pd.merge(f1, f2, how='right', on='f')
+    # feature_importance = feature_importance.fillna(0)
+    #
+    # feature_importance[['feature_name', 'importance', 'rmse_wo_feature']].sort_values(by='importance', ascending=False)
 
 
 if __name__ == '__main__':
     train, test = load_train_and_test()
-
+    x_columns += other_feature_names
     # PCA
     # from sklearn.decomposition import PCA
     #
@@ -175,5 +237,5 @@ if __name__ == '__main__':
     # print train.columns
 
     # ExtraTreeMain(train, test)
-    RandomForestMain(train, test)
-    # XGB_Main(train, test)
+    # RandomForestMain(train, test)
+    XGB_Main(train, test)
