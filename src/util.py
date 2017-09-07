@@ -37,6 +37,13 @@ group_ones = ["pickup_label", "hour", "weekday", "weekofyear", "dayofyear"]
 avgs = ["log_trip_duration", "speed_m", "speed_h"]
 
 
+def clean_train(train):
+    train = train.drop(train[train.trip_duration > 100000].index, axis=0).reset_index()
+    # clean more will be worse
+    # _speed = 3.6 * (train.total_distance / train.trip_duration)
+    # re_index = train[((_speed > 300) | (_speed < 0.01))].index
+    # train = train.drop(re_index).reset_index()
+    return train
 
 
 def train_model(model, trainx, trainy, cv=0, grid_search=False, re_fit=True, grid_params=None):
@@ -390,6 +397,9 @@ def preprocess_cluster(train, test):
     train["speed_m"] = 1000 * train.manhattan_distance / train.trip_duration
     train["speed_h"] = 1000 * train.haversine_distance / train.trip_duration
 
+    # 这里把认为可能是异常的标0,不是异常的标1
+    # (train.speed_m * 3.6) > 500
+
 
     for group in group_twos:
         temp = train[group + avgs].groupby(group).mean().reset_index()
@@ -400,7 +410,6 @@ def preprocess_cluster(train, test):
         temp.columns = new_group
         train = pd.merge(train, temp, on=group, how="left")
         test = pd.merge(test, temp, on=group, how="left")
-
 
     for group in group_ones:
         temp = train[[group] + avgs].groupby(group).mean().reset_index()
@@ -427,6 +436,7 @@ def load_train():
         ft_part2 = pd.read_csv("../data/fastest_routes_train_part_2.csv")
         ft = pd.concat([ft_part1, ft_part2])
         __train = pd.merge(__train, ft, on="id")
+        __train = clean_train(__train)
         __train = preprocess_trip_duration(__train)
         __train = preprocess_time(__train)
         __train = preprocess_lon_lat(__train)
@@ -493,7 +503,6 @@ def load_train_and_test():
     print "in test, null size is ", test_null_size
 
     print "train columns:", train.columns
-
 
     for group in group_twos:
         for avg_name in avgs:

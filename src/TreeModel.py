@@ -134,9 +134,9 @@ def XGB_Main(train, test):
     watchlist = [(dtrain, 'train'), (dvalid, 'valid')]
 
     # Try different parameters! My favorite is random search :)
-    lr = 0.1
+    lr = 0.05
     n_rounds = 5000
-    early_stopping_rounds = 200
+    early_stopping_rounds = 50
     xgb_pars = {'min_child_weight': 100,
                 'eta': lr,
                 'colsample_bytree': 0.5,
@@ -201,7 +201,6 @@ def XGB_Main(train, test):
     model.booster().save_model(model_save_path.replace("csv", "model"))
     # feature importance
     feature_importance_dict = model.booster().get_fscore()
-    print model.feature_importances_
     print feature_importance_dict
     # fs = ['f%i' % i for i in range(len(feature_names))]
     # f1 = pd.DataFrame({'f': list(feature_importance_dict.keys()), 'importance': list(feature_importance_dict.values())})
